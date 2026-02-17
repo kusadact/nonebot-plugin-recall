@@ -7,21 +7,6 @@
 - 文本/图片等消息：`用户名撤回了一条消息：...`（图片会以真实图片段发送）
 - 语音消息：先发 `用户名撤回了一条语音`，再单独发送原语音
 
-## 安装
-
-```bash
-pip install -e .
-```
-
-## 加载插件
-
-在 `bot.py` 中加载：
-
-```python
-nonebot.load_plugin("nonebot_plugin_recall")
-```
-
-或在 `pyproject.toml` / 插件配置里加入 `nonebot_plugin_recall`。
 
 ## 配置
 
