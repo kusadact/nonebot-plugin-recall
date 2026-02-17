@@ -67,7 +67,11 @@ def _build_non_voice_message(message: Message) -> Message:
             continue
 
         if segment_type == "face":
-            content.append(MessageSegment.text("[表情]"))
+            # Unsupported extended faces (e.g. faceType=3) are rendered as text placeholder.
+            if _is_unsupported_face(segment):
+                content.append(MessageSegment.text(_unsupported_face_placeholder(segment)))
+                continue
+            content.append(segment)
         elif segment_type == "video":
             content.append(MessageSegment.text("[视频]"))
         elif segment_type == "file":
@@ -76,6 +80,33 @@ def _build_non_voice_message(message: Message) -> Message:
             content.append(MessageSegment.text(f"[{segment_type}]"))
 
     return content
+
+
+def _is_unsupported_face(segment: MessageSegment) -> bool:
+    if segment.type != "face":
+        return False
+
+    raw = segment.data.get("raw")
+    if not isinstance(raw, dict):
+        return False
+
+    face_type = raw.get("faceType")
+    try:
+        return int(face_type) == 3
+    except Exception:
+        return False
+
+
+def _unsupported_face_placeholder(segment: MessageSegment) -> str:
+    raw = segment.data.get("raw")
+    if isinstance(raw, dict):
+        face_text = str(raw.get("faceText", "")).strip()
+        if face_text:
+            return f"[表情:{face_text}]"
+    face_id = segment.data.get("id")
+    if face_id is not None:
+        return f"[表情:{face_id}]"
+    return "[表情]"
 
 
 async def _get_member_name(bot: Bot, group_id: int, user_id: int) -> str:
