@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from nonebot import get_driver, logger, on_type
@@ -45,6 +46,23 @@ else:
 
 def _in_whitelist(group_id: int) -> bool:
     return group_id in plugin_config.recall_group_whitelist
+
+
+def _safe_timestamp(raw: object) -> int:
+    parsed = _parse_timestamp(raw)
+    if parsed is not None:
+        return parsed
+    return int(time.time())
+
+
+def _parse_timestamp(raw: object) -> Optional[int]:
+    try:
+        ts = int(raw)  # type: ignore[arg-type]
+        if ts > 0:
+            return ts
+    except Exception:
+        pass
+    return None
 
 
 def _build_non_voice_message(message: Message) -> Message:
@@ -124,23 +142,29 @@ async def _get_member_name(bot: Bot, group_id: int, user_id: int) -> str:
     return card or nickname or str(user_id)
 
 
-async def _get_recalled_message(bot: Bot, message_id: int) -> Optional[Message]:
+async def _get_recalled_message(
+    bot: Bot,
+    message_id: int,
+) -> Optional[tuple[Message, Optional[int]]]:
     try:
         data = await bot.get_msg(message_id=message_id)
     except ActionFailed:
         return None
 
+    recalled_ts = _parse_timestamp(data.get("time", 0))
     raw_message = data.get("message", "")
     try:
-        return raw_message if isinstance(raw_message, Message) else Message(raw_message)
+        parsed = raw_message if isinstance(raw_message, Message) else Message(raw_message)
+        return parsed, recalled_ts
     except Exception:
         logger.warning(f"nonebot-plugin-recall: failed to parse recalled message: {raw_message!r}")
         return None
 
 
 # 缓存群消息，用于撤回后尽量恢复内容。
-_message_cache: dict[tuple[int, int], Message] = {}
+_message_cache: dict[tuple[int, int], tuple[Message, int]] = {}
 _cache_max_size = 5000
+_recall_max_age_seconds = 120
 
 cache_group_message = on_type(GroupMessageEvent, priority=999, block=False)
 
@@ -150,8 +174,14 @@ async def _(event: GroupMessageEvent) -> None:
     if not _in_whitelist(event.group_id):
         return
 
+    now_ts = _safe_timestamp(getattr(event, "time", 0))
+    expired_before = now_ts - _recall_max_age_seconds
+    for k, (_, msg_ts) in list(_message_cache.items()):
+        if msg_ts < expired_before:
+            _message_cache.pop(k, None)
+
     key = (event.group_id, int(event.message_id))
-    _message_cache[key] = Message(event.get_message())
+    _message_cache[key] = (Message(event.get_message()), now_ts)
 
     if len(_message_cache) > _cache_max_size:
         # 删除最旧的一条，避免内存无限增长。
@@ -171,11 +201,27 @@ async def _(bot: Bot, event: GroupRecallNoticeEvent) -> None:
     if int(event.user_id) != int(event.operator_id):
         return
 
+    recall_ts = _safe_timestamp(getattr(event, "time", 0))
+    expired_before = recall_ts - _recall_max_age_seconds
+    for k, (_, msg_ts) in list(_message_cache.items()):
+        if msg_ts < expired_before:
+            _message_cache.pop(k, None)
+
     name = await _get_member_name(bot, event.group_id, event.user_id)
     cache_key = (event.group_id, int(event.message_id))
-    recalled = _message_cache.pop(cache_key, None)
-    if recalled is None:
-        recalled = await _get_recalled_message(bot, int(event.message_id))
+    cached = _message_cache.pop(cache_key, None)
+    recalled: Optional[Message] = None
+    recalled_ts: Optional[int] = None
+    if cached is not None:
+        recalled, recalled_ts = cached
+    else:
+        loaded = await _get_recalled_message(bot, int(event.message_id))
+        if loaded is not None:
+            recalled, recalled_ts = loaded
+
+    # 超过 2 分钟的消息不做防撤回提示。
+    if recalled_ts is not None and recall_ts - recalled_ts > _recall_max_age_seconds:
+        return
 
     if recalled is None:
         await bot.send_group_msg(
