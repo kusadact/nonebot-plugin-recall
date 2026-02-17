@@ -1,0 +1,13 @@
+[project]
+name = "nonebot-plugin-recall"
+version = "0.1.0"
+description = "NoneBot2 群聊防撤回插件（白名单）"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "nonebot2>=2.2.0",
+    "nonebot-adapter-onebot>=2.2.0",
+]
+
+[project.entry-points."nonebot.plugin"]
+nonebot_plugin_recall = "nonebot_plugin_recall"
